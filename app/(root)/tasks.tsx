@@ -5,6 +5,7 @@ import {
   FlatList,
   Image,
   Pressable,
+  ScrollView,
   Text,
   TextInput,
   View,
@@ -13,30 +14,22 @@ import { useFocusEffect } from "@react-navigation/native";
 import * as Linking from "expo-linking";
 import * as Location from "expo-location";
 import MapView, { Marker } from "react-native-maps";
+import { useRouter } from "expo-router";
 
 import { Screen } from "../../src/components/Screen";
 import { colors, ui } from "../../src/theme/ui";
 import { Segmented } from "../../src/components/Segmented";
 import { TaskRow } from "../../src/components/TaskRow";
 import { useRequireAuth } from "../../src/hooks/useRequireAuth";
-import {
-  Task,
-  loadTasks,
-  saveTasks,
-  formatDateTime,
-} from "../../src/storage/tasks";
+import { Task, loadTasks, saveTasks, formatDateTime } from "../../src/storage/tasks";
 import { fetchLatestNews } from "../../src/api/news";
 import { clearSession, getSession } from "../../src/storage/auth";
-import {
-  loadProfile,
-  saveProfile,
-  ProfileData,
-  avatars,
-} from "../../src/storage/profile";
+import { loadProfile, saveProfile, ProfileData, avatars } from "../../src/storage/profile";
 
 type TabKey = "list" | "add" | "done" | "map" | "news" | "profile";
 
 export default function TasksScreen() {
+  const router = useRouter();
   const allowed = useRequireAuth(); // jeśli brak sesji -> przerzuca do login
   const [tab, setTab] = useState<TabKey>("list");
 
@@ -63,6 +56,17 @@ export default function TasksScreen() {
   });
   const [savingProfile, setSavingProfile] = useState(false);
 
+  // 🔔 Toast (chmurka u góry)
+  const [toast, setToast] = useState<{ visible: boolean; message: string; kind?: "ok" | "error" }>(
+    { visible: false, message: "", kind: "ok" }
+  );
+  const showToast = (message: string, kind: "ok" | "error" = "ok") => {
+    setToast({ visible: true, message, kind });
+    setTimeout(() => {
+      setToast((t) => ({ ...t, visible: false }));
+    }, 1600);
+  };
+
   const reload = async () => {
     setLoadingTasks(true);
     const t = await loadTasks();
@@ -82,23 +86,43 @@ export default function TasksScreen() {
     await saveTasks(next);
   };
 
+  // ✅ PODZIAŁ: Lista = tylko aktywne, Wykonane = tylko wykonane
+  const { active, done } = useMemo(() => {
+    const a = tasks.filter((t) => !t.done).sort((x, y) => y.createdAt - x.createdAt);
+    const d = tasks
+      .filter((t) => t.done)
+      .sort((x, y) => (y.completedAt ?? 0) - (x.completedAt ?? 0));
+    return { active: a, done: d };
+  }, [tasks]);
+
   const addTask = async () => {
     const title = newTitle.trim();
-    if (!title) return Alert.alert("Błąd", "Wpisz treść zadania.");
+    if (!title) {
+      showToast("⚠️ Wpisz treść zadania", "error");
+      return;
+    }
+
     const next: Task[] = [
       { id: String(Date.now()), title, done: false, createdAt: Date.now() },
       ...tasks,
     ];
+
     await persist(next);
     setNewTitle("");
-    setTab("list");
+
+    // ✅ Toast i zostajesz w „Dodaj”
+    showToast("✅ Dodano zadanie", "ok");
   };
 
   const toggleDone = async (id: string) => {
     const next = tasks.map((t) => {
       if (t.id !== id) return t;
       const willBeDone = !t.done;
-      return { ...t, done: willBeDone, completedAt: willBeDone ? Date.now() : undefined };
+      return {
+        ...t,
+        done: willBeDone,
+        completedAt: willBeDone ? Date.now() : undefined,
+      };
     });
     await persist(next);
   };
@@ -107,14 +131,6 @@ export default function TasksScreen() {
     const next = tasks.filter((t) => t.id !== id);
     await persist(next);
   };
-
-  const { active, done } = useMemo(() => {
-    const a = tasks.filter((t) => !t.done).sort((x, y) => y.createdAt - x.createdAt);
-    const d = tasks
-      .filter((t) => t.done)
-      .sort((x, y) => (y.completedAt ?? 0) - (x.completedAt ?? 0));
-    return { active: a, done: d };
-  }, [tasks]);
 
   const loadNews = async () => {
     setLoadingNews(true);
@@ -157,15 +173,17 @@ export default function TasksScreen() {
     setSavingProfile(true);
     try {
       await saveProfile(profile);
-      Alert.alert("OK", "Zapisano profil.");
+      showToast("✅ Zapisano profil", "ok");
     } finally {
       setSavingProfile(false);
     }
   };
 
+  // ✅ Wylogowanie w profilu + przeniesienie do zakładki Logowanie
   const onLogout = async () => {
     await clearSession();
-    Alert.alert("OK", "Wylogowano.");
+    showToast("✅ Wylogowano", "ok");
+    router.replace("/(root)/login");
   };
 
   useEffect(() => {
@@ -188,7 +206,29 @@ export default function TasksScreen() {
 
   return (
     <Screen>
-      <View style={{ ...ui.screen, gap: 12 }}>
+      {/* 🔔 Toast na górze */}
+      {toast.visible ? (
+        <View
+          style={{
+            position: "absolute",
+            top: 12,
+            left: 12,
+            right: 12,
+            zIndex: 1000,
+            borderRadius: 14,
+            paddingVertical: 12,
+            paddingHorizontal: 14,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor:
+              toast.kind === "error" ? "rgba(255,92,122,0.18)" : "rgba(66,211,146,0.14)",
+          }}
+        >
+          <Text style={{ color: colors.text, fontWeight: "900" }}>{toast.message}</Text>
+        </View>
+      ) : null}
+
+      <View style={{ ...ui.screen, gap: 12, paddingTop: 52 }}>
         <Text style={ui.title}>Zadania</Text>
 
         <Segmented
@@ -214,7 +254,7 @@ export default function TasksScreen() {
             ) : null}
 
             <FlatList
-              data={[...active, ...done]}
+              data={active}
               keyExtractor={(t) => t.id}
               contentContainerStyle={{ gap: 10, paddingBottom: 18 }}
               renderItem={({ item, index }) => (
@@ -227,7 +267,7 @@ export default function TasksScreen() {
               )}
               ListEmptyComponent={
                 <Text style={{ color: colors.muted }}>
-                  Brak zadań. Dodaj w zakładce „Dodaj”.
+                  Brak aktywnych zadań. Dodaj w zakładce „Dodaj”.
                 </Text>
               }
             />
@@ -250,6 +290,9 @@ export default function TasksScreen() {
               <Pressable onPress={addTask} style={ui.button}>
                 <Text style={ui.buttonText}>Dodaj</Text>
               </Pressable>
+              <Text style={{ color: colors.muted, marginTop: 10, fontSize: 12 }}>
+                Po dodaniu zostajesz tutaj — możesz dodawać kolejne.
+              </Text>
             </View>
           </View>
         )}
@@ -282,15 +325,19 @@ export default function TasksScreen() {
                   <View style={{ flexDirection: "row", gap: 10, marginTop: 10 }}>
                     <Pressable
                       onPress={() => toggleDone(item.id)}
-                      style={[ui.smallBtn, { backgroundColor: "rgba(255,255,255,0.06)" }]}
+                      style={[ui.smallBtn, { backgroundColor: "rgba(255,255,255,0.06)", flex: 1 }]}
                     >
-                      <Text style={{ color: colors.text, fontWeight: "900" }}>Cofnij ✓</Text>
+                      <Text style={{ color: colors.text, fontWeight: "900", textAlign: "center" }}>
+                        Cofnij ✓
+                      </Text>
                     </Pressable>
                     <Pressable
                       onPress={() => removeTask(item.id)}
-                      style={[ui.smallBtn, { backgroundColor: "rgba(255,92,122,0.14)" }]}
+                      style={[ui.smallBtn, { backgroundColor: "rgba(255,92,122,0.14)", flex: 1 }]}
                     >
-                      <Text style={{ color: colors.danger, fontWeight: "900" }}>Usuń</Text>
+                      <Text style={{ color: colors.danger, fontWeight: "900", textAlign: "center" }}>
+                        Usuń
+                      </Text>
                     </Pressable>
                   </View>
                 </View>
@@ -376,14 +423,42 @@ export default function TasksScreen() {
           </View>
         )}
 
+        {/* ✅ PROFIL: ScrollView + WYLOGUJ NA GÓRZE */}
         {tab === "profile" && (
-          <View style={{ flex: 1, gap: 10 }}>
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{
+              flexGrow: 1,
+              gap: 10,
+              paddingBottom: 140, // duży zapas na iPhone + tabbar
+            }}
+            showsVerticalScrollIndicator={true}
+          >
             <View style={{ ...ui.card, alignItems: "center", gap: 10 }}>
               <Image
                 source={{ uri: avatars[profile.avatarIndex] }}
-                style={{ width: 110, height: 110, borderRadius: 55, borderWidth: 2, borderColor: colors.border }}
+                style={{
+                  width: 110,
+                  height: 110,
+                  borderRadius: 55,
+                  borderWidth: 2,
+                  borderColor: colors.border,
+                }}
               />
               <Text style={{ color: colors.muted }}>Email: {email || "-"}</Text>
+
+              {/* ✅ WYLOGUJ — ZAWSZE WIDOCZNY */}
+              <Pressable
+                onPress={onLogout}
+                style={[
+                  ui.smallBtn,
+                  { backgroundColor: "rgba(255,92,122,0.14)", alignSelf: "stretch" },
+                ]}
+              >
+                <Text style={{ color: colors.danger, fontWeight: "900", textAlign: "center" }}>
+                  Wyloguj
+                </Text>
+              </Pressable>
 
               <Text style={{ color: colors.text, fontWeight: "900" }}>Avatar (5 opcji)</Text>
               <View style={{ flexDirection: "row", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
@@ -430,15 +505,24 @@ export default function TasksScreen() {
                 style={ui.input}
               />
 
-              <Pressable onPress={onSaveProfile} style={{ ...ui.button, opacity: savingProfile ? 0.75 : 1 }}>
+              <Pressable
+                onPress={onSaveProfile}
+                style={{ ...ui.button, opacity: savingProfile ? 0.75 : 1 }}
+              >
                 <Text style={ui.buttonText}>{savingProfile ? "Zapisuję…" : "Zapisz profil"}</Text>
               </Pressable>
 
-              <Pressable onPress={onLogout} style={[ui.smallBtn, { backgroundColor: "rgba(255,92,122,0.14)" }]}>
-                <Text style={{ color: colors.danger, fontWeight: "900" }}>Wyloguj</Text>
+              {/* drugi Wyloguj na dole (może zostać) */}
+              <Pressable
+                onPress={onLogout}
+                style={[ui.smallBtn, { backgroundColor: "rgba(255,92,122,0.14)" }]}
+              >
+                <Text style={{ color: colors.danger, fontWeight: "900", textAlign: "center" }}>
+                  Wyloguj (dół)
+                </Text>
               </Pressable>
             </View>
-          </View>
+          </ScrollView>
         )}
       </View>
     </Screen>

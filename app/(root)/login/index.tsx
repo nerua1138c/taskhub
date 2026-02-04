@@ -1,18 +1,37 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
+
 import { Screen } from "../../../src/components/Screen";
 import { colors, ui } from "../../../src/theme/ui";
-import { getRegisteredUser, setSession } from "../../../src/storage/auth";
+import { getRegisteredUser, setSession, getSession } from "../../../src/storage/auth";
 
 const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Login() {
   const router = useRouter();
+
+  const [sessionEmail, setSessionEmail] = useState<string | null>(null);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
   const emailOk = useMemo(() => emailRegex.test(email.trim().toLowerCase()), [email]);
+
+  const refreshSession = useCallback(() => {
+    (async () => {
+      const s = await getSession();
+      setSessionEmail(s);
+    })();
+  }, []);
+
+  // odświeżaj stan sesji za każdym wejściem w zakładkę Logowanie
+  useFocusEffect(
+    useCallback(() => {
+      refreshSession();
+    }, [refreshSession])
+  );
 
   const onLogin = async () => {
     const e = email.trim().toLowerCase();
@@ -29,10 +48,35 @@ export default function Login() {
     }
 
     await setSession(e);
-    Alert.alert("OK", "Zalogowano.");
+    setEmail("");
+    setPassword("");
+    setSessionEmail(e);
+
+    // przerzut na zakładkę Zadania
     router.replace("/(root)/tasks");
   };
 
+  // ✅ Jeśli zalogowany — pokazujemy ekran „Jesteś zalogowany!”
+  if (sessionEmail) {
+    return (
+      <Screen>
+        <View style={{ ...ui.screen, justifyContent: "center", alignItems: "center", gap: 12 }}>
+          <Text style={ui.title}>Jesteś zalogowany!</Text>
+          <Text style={ui.subtitle}>{sessionEmail}</Text>
+
+          <Pressable onPress={() => router.replace("/(root)/tasks")} style={ui.button}>
+            <Text style={ui.buttonText}>Przejdź do aplikacji</Text>
+          </Pressable>
+
+          <Text style={{ color: colors.muted, marginTop: 10, textAlign: "center" }}>
+            Wylogowanie znajdziesz w zakładce Zadania → Profil.
+          </Text>
+        </View>
+      </Screen>
+    );
+  }
+
+  // ✅ Jeśli NIE zalogowany — normalny formularz logowania
   return (
     <Screen>
       <View style={{ ...ui.screen, justifyContent: "center", gap: 12 }}>
